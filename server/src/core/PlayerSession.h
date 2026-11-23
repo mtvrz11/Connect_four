@@ -20,7 +20,7 @@ struct PlayerSession
 
     std::optional<int> room_id = std::nullopt;
 
-    int invalid_msgs_count = 0;
+    size_t invalid_msgs_count = 0;
 
     std::chrono::steady_clock::time_point last_activity = std::chrono::steady_clock::now();
     bool waiting_for_pong = false;

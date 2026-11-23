@@ -95,3 +95,7 @@ bool ConnectFourGame::is_board_full() const {
     }
     return true;
 }
+
+char ConnectFourGame::get_current_turn() const noexcept {
+    return current_turn;
+}

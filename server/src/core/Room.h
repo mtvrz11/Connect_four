@@ -25,7 +25,7 @@ struct RoomPlayerSlot {
 };
 
 class Room {
-    int find_slot_index(int fd) const;
+    size_t find_slot_index(int fd) const;
 
     int id;
     RoomState state = RoomState::WAITING;

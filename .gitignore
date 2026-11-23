@@ -69,3 +69,5 @@ Testing/
 
 .vscode/
 *.code-workspace
+
+.mypy_cache

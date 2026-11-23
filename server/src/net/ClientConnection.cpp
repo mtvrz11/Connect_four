@@ -49,9 +49,7 @@ ExtractStatus ClientConnection::extract_message(ParsedMessage& out_message) {
         return ExtractStatus::INVALID_HEADER;
 
     std::string_view len_str = view.substr(protocol::MAGIC_LEN + protocol::OPCODE_LEN, protocol::LENGTH_FIELD_LEN);
-    size_t processed_chars = 0;
-    int body_len = 0;
-    std::size_t body_len = 0;
+    size_t body_len = 0;
     for (char ch : len_str) {
         if (!std::isdigit(static_cast<unsigned char>(ch))) {
             return ExtractStatus::INVALID_HEADER;
@@ -59,7 +57,7 @@ ExtractStatus ClientConnection::extract_message(ParsedMessage& out_message) {
         body_len = body_len * 10 + static_cast<std::size_t>(ch - '0');
     }
     
-    const int msg_len = protocol::HEADER_LEN + body_len;
+    const size_t msg_len = protocol::HEADER_LEN + body_len;
     if (rx_buffer.size() < msg_len)
         return ExtractStatus::NEED_MORE_DATA;
 

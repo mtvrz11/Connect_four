@@ -6,7 +6,7 @@
 namespace signal_handler {
     inline std::atomic<bool> g_running{true};
 
-    inline void handle_stop_signal(int _) {
+    inline void handle_stop_signal(int) {
         g_running = false;
     }
 

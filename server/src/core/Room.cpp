@@ -66,7 +66,7 @@ std::optional<int> Room::handle_player_disconnect(int fd) {
 }
 
 std::optional<int> Room::reconnect_player(int new_fd, std::string nick) {
-    for (int i = 0; i < slots.size(); i++) {
+    for (size_t i = 0; i < slots.size(); i++) {
         if (slots[i].nick == nick && !slots[i].is_connected()) {
             slots[i].fd = new_fd;
             slots[i].disconnected_at = std::nullopt;
@@ -128,8 +128,8 @@ std::string Room::serialize_board() const {
     return game.serialize_board();
 }
 
-int Room::find_slot_index(int fd) const {
-    for (int i = 0; i < slots.size(); i++) {
+size_t Room::find_slot_index(int fd) const {
+    for (size_t i = 0; i < slots.size(); i++) {
         if (slots[i].fd == fd)
             return i;
     }
