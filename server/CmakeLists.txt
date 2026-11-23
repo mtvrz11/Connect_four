@@ -1,0 +1,14 @@
+cmake_minimum_required(VERSION 3.10)
+project(server)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+file(GLOB_RECURSE SOURCES "src/*.cpp")
+
+add_executable(server ${SOURCES})
+
+target_include_directories(server PRIVATE src)
+target_compile_options(server PRIVATE -Wall -Wextra -Wpedantic)
