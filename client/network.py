@@ -1,9 +1,13 @@
 import queue
 import socket
 import threading
+import time
 from dataclasses import dataclass
 
 from protocol import ExtractStatus, ParsedMessage, build_message, extract_message, Opcode
+
+PING_INTERVAL: float = 10.0
+PONG_TIMEOUT:float = 5.0
 
 @dataclass
 class NetworkEvent:
@@ -17,6 +21,9 @@ class NetworkClient:
         self._send_lock = threading.Lock()
         self._running = False
         self._recv_thread: threading.Thread | None = None
+        self._last_rx_time: float = 0.0
+        self._waiting_for_pong: bool = False
+        self._ping_sent_time: float = 0.0
         self.incoming_queue: queue.Queue[NetworkEvent] = queue.Queue()
         
     @property
@@ -33,12 +40,16 @@ class NetworkClient:
         sock.settimeout(1.0) # pro cteni mensi timeout...
         
         self._sock = sock
+        self._last_rx_time = time.monotonic()
+        self._waiting_for_pong = False
+        self._ping_sent_time = 0.0
         self._running = True
         self._recv_thread = threading.Thread(target=self._recieve_loop, daemon=True)
         self._recv_thread.start()
         
     def disconnect(self):
         self._running = False
+        self._waiting_for_pong = False
         with self._send_lock:
             if self._sock is not None:
                 try:
@@ -48,7 +59,7 @@ class NetworkClient:
                 self._sock.close()
                 self._sock = None
     
-    def send_message(self, opcode: str, body: str = "") -> None:
+    def send_message(self, opcode: Opcode, body: str = "") -> None:
         raw = build_message(opcode, body)
         with self._send_lock:
             if not self._running or self._sock is None:
@@ -70,6 +81,8 @@ class NetworkClient:
                         self._running = False
                         self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Server ukoncil spojeni"))
                     break
+                
+                self._last_rx_time = time.monotonic()
                 rx_buffer.extend(chunk)
                 
                 while self._running:
@@ -77,6 +90,8 @@ class NetworkClient:
                     if status == ExtractStatus.OK and msg is not None:
                         if msg.opcode == Opcode.PING:
                             self.send_message(Opcode.PONG)
+                        elif msg.opcode == Opcode.PONG:
+                            self._waiting_for_pong = False
                         else:
                             self.incoming_queue.put(NetworkEvent("MESSAGE", msg))
                     elif status == ExtractStatus.INVALID_HEADER:
@@ -88,6 +103,16 @@ class NetworkClient:
                         break
                 
             except socket.timeout:
+                now = time.monotonic()
+                if self._waiting_for_pong:
+                    if (now - self._ping_sent_time) >= PONG_TIMEOUT:
+                        self._running = False
+                        self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Server neodpovedel na PING"))
+                        break
+                elif (now - self._last_rx_time) >= PING_INTERVAL:
+                    self.send_message(Opcode.PING)
+                    self._waiting_for_pong = True
+                    self._ping_sent_time = now
                 continue
             except OSError:
                 if self._running:

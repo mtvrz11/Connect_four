@@ -58,7 +58,7 @@ bool ConnectFourGame::check_win(int last_row, int last_col) const {
         {0, 1}, // vodorovne
         {1, 0}, // svisle
         {1, 1}, // hlavni diag
-        {-1, -1} // vedlejsi diag
+        {1, -1} // vedlejsi diag
     };
 
     for (const auto& dir : directions) {

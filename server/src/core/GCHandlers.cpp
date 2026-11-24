@@ -42,13 +42,13 @@ void GameController::handle_login(PlayerSession& session, std::string_view body)
         if (nick.empty() || nick.size() > MAX_NICK_LENGTH)
             return false;
         for (unsigned char c : nick) {
-            if (c < 33 || c > 126 || c == static_cast<unsigned char>(protocol::DELIMITER))
+            if (c < 33 || c > 126 || c == static_cast<unsigned char>(protocol::DELIMITER)) // omezeni na tisknutelne ascii znaky
                 return false;
         }
         return true;
     };
 
-    if (is_valid_nick(body)) {
+    if (!is_valid_nick(body)) {
         send_error(session, protocol::ErrorCode::INVL);
         return;
     }
@@ -103,8 +103,10 @@ void GameController::handle_room_make(PlayerSession& session, std::string_view b
         return;
     }
 
-    const int room_id = next_room_id;
-    next_room_id++;
+    int room_id = 1;
+    while (rooms.find(room_id) != rooms.end()) {
+        room_id++;
+    }
     rooms.emplace(room_id, Room(room_id, session.fd, session.nick));
 
     session.room_id = room_id;

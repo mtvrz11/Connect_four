@@ -40,15 +40,16 @@ class ParsedMessage:
     opcode: str
     body: str
     
-def build_message(opcode: str, body: str = "") -> bytes:
-    if len(opcode) != OPCODE_LEN:
+def build_message(opcode: Opcode, body: str = "") -> bytes:
+    op_str = opcode.value if isinstance(opcode, Opcode) else opcode
+    if len(op_str) != OPCODE_LEN:
         raise ValueError(f"Opcode musi mit presne delku {OPCODE_LEN}.")
         
     body_bytes = body.encode("ascii")
     if len(body_bytes) > MAX_BODY_LEN:
         raise ValueError(f"Telo zpravy prakracuje maximalni delku {MAX_BODY_LEN} znaku.")
     
-    header = f"MTVRZ{opcode}{len(body_bytes):03d}".encode("ascii")
+    header = f"MTVRZ{op_str}{len(body_bytes):03d}".encode("ascii")
     return header + body_bytes
 
 def extract_message(rx_buffer: bytearray) -> tuple[ExtractStatus, ParsedMessage | None]:

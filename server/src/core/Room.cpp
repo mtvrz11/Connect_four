@@ -133,9 +133,9 @@ std::string Room::serialize_board() const {
 }
 
 int Room::find_slot_index(int fd) const {
-    for (int i = 0; i < slots.size(); i++) {
+    for (size_t i = 0; i < slots.size(); i++) {
         if (slots[i].fd == fd)
-            return i;
+            return static_cast<int>(i);
     }
     return -1;
 }

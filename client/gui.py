@@ -117,7 +117,7 @@ class ConnectFourGUI:
             return
         
         self.nickname = nick
-        self.net.send_message("SYNC" if sync else "LGIN", nick)
+        self.net.send_message(Opcode.SYNC if sync else Opcode.LGIN, nick)
     
     def _disconnect_to_login(self) -> None:
         self.net.disconnect()
@@ -131,7 +131,7 @@ class ConnectFourGUI:
         if room_id is None:
             messagebox.showinfo("Vyber mistnosti", "Nejprve vyberte mistnost ze seznamu.")
             return
-        self.net.send_message(Opcode.RJOI, room_id) # nahradit kody za enum !!!
+        self.net.send_message(Opcode.RJOI, room_id)
         
     def _leave_waiting_room(self) -> None:
         if self.in_waiting_room:
