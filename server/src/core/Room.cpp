@@ -4,7 +4,7 @@
 
 Room::Room(int id, int creator_fd, const std::string& creator_nick) : id(id) {
     slots[0].fd = creator_fd;
-    slots[0].nick = std::move(creator_nick);
+    slots[0].nick = creator_nick;
     slots[0].disc = ConnectFourGame::PLAYER_1;
 }
 
@@ -30,7 +30,7 @@ bool Room::join_second_player(int fd, const std::string& nick) {
         return false;
 
     slots[1].fd = fd;
-    slots[1].nick = std::move(nick);
+    slots[1].nick = nick;
     slots[1].disc = ConnectFourGame::PLAYER_2;
 
     game.reset(ConnectFourGame::PLAYER_1);
@@ -65,7 +65,7 @@ std::optional<int> Room::handle_player_disconnect(int fd) {
     return slots[opponent_idx].fd;
 }
 
-std::optional<int> Room::reconnect_player(int new_fd, std::string nick) {
+std::optional<ReconnectResult> Room::reconnect_player(int new_fd, std::string_view nick) {
     for (size_t i = 0; i < slots.size(); i++) {
         if (slots[i].nick == nick && !slots[i].is_connected()) {
             slots[i].fd = new_fd;
@@ -75,7 +75,11 @@ std::optional<int> Room::reconnect_player(int new_fd, std::string nick) {
                 state = RoomState::PLAYING;
 
             const int opponent_idx = (i == 0) ? 1 : 0;
-            return slots[opponent_idx].fd;
+            return ReconnectResult {
+                slots[opponent_idx].fd,
+                slots[i].disc,
+                slots[opponent_idx].nick
+            };
         }
     }
     return std::nullopt;
@@ -128,8 +132,8 @@ std::string Room::serialize_board() const {
     return game.serialize_board();
 }
 
-size_t Room::find_slot_index(int fd) const {
-    for (size_t i = 0; i < slots.size(); i++) {
+int Room::find_slot_index(int fd) const {
+    for (int i = 0; i < slots.size(); i++) {
         if (slots[i].fd == fd)
             return i;
     }

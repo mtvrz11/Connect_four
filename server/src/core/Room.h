@@ -14,6 +14,12 @@ enum class RoomState {
     PAUSED
 };
 
+struct ReconnectResult {
+    std::optional<int> opponent_fd;
+    char player_disc;
+    std::string opponent_nick;
+};
+
 struct RoomPlayerSlot {
     std::optional<int> fd = std::nullopt;
     std::string nick;
@@ -25,7 +31,7 @@ struct RoomPlayerSlot {
 };
 
 class Room {
-    size_t find_slot_index(int fd) const;
+    int find_slot_index(int fd) const;
 
     int id;
     RoomState state = RoomState::WAITING;
@@ -45,7 +51,7 @@ public:
 
     std::optional<int> handle_player_disconnect(int fd);
 
-    std::optional<int> reconnect_player(int new_fd, std::string nick);
+    std::optional<ReconnectResult> reconnect_player(int new_fd, std::string_view nick);
 
     bool is_reconnect_timed_out(std::chrono::seconds limit) const;
 

@@ -1,0 +1,96 @@
+import queue
+import socket
+import threading
+from dataclasses import dataclass
+
+from protocol import ExtractStatus, ParsedMessage, build_message, extract_message, Opcode
+
+@dataclass
+class NetworkEvent:
+    kind: str
+    message: ParsedMessage | None = None
+    info: str = ""
+    
+class NetworkClient:
+    def __init__(self) -> None:
+        self._sock: socket.socket | None = None
+        self._send_lock = threading.Lock()
+        self._running = False
+        self._recv_thread: threading.Thread | None = None
+        self.incoming_queue: queue.Queue[NetworkEvent] = queue.Queue()
+        
+    @property
+    def is_connected(self) -> bool:
+        return self._running and self._sock is not None
+    
+    def connect(self, host:str, port: int, timeout: float = 10.0) -> None:
+        self.disconnect()
+        
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout) # jen ochrana proti dlouhemu cekani pri zadani spatne adresy
+        sock.connect((host, port))
+        
+        sock.settimeout(1.0) # pro cteni mensi timeout...
+        
+        self._sock = sock
+        self._running = True
+        self._recv_thread = threading.Thread(target=self._recieve_loop, daemon=True)
+        self._recv_thread.start()
+        
+    def disconnect(self):
+        self._running = False
+        with self._send_lock:
+            if self._sock is not None:
+                try:
+                    self._sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self._sock.close()
+                self._sock = None
+    
+    def send_message(self, opcode: str, body: str = "") -> None:
+        raw = build_message(opcode, body)
+        with self._send_lock:
+            if not self._running or self._sock is None:
+                return
+            try:
+                self._sock.sendall(raw)
+            except OSError:
+                self._running = False
+                self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Ztrata spojeni se serverem"))
+    
+    def _recieve_loop(self) -> None:
+        rx_buffer = bytearray()
+        
+        while self._running and self._sock is not None:
+            try:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    if self._running:
+                        self._running = False
+                        self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Server ukoncil spojeni"))
+                    break
+                rx_buffer.extend(chunk)
+                
+                while self._running:
+                    status, msg = extract_message(rx_buffer)
+                    if status == ExtractStatus.OK and msg is not None:
+                        if msg.opcode == Opcode.PING:
+                            self.send_message(Opcode.PONG)
+                        else:
+                            self.incoming_queue.put(NetworkEvent("MESSAGE", msg))
+                    elif status == ExtractStatus.INVALID_HEADER:
+                        self._running = False
+                        self.incoming_queue.put(NetworkEvent(kind="ERROR", info="Server poslal nevalidni hlavicku protokolu."))
+                        break
+                    else:
+                        # need more data
+                        break
+                
+            except socket.timeout:
+                continue
+            except OSError:
+                if self._running:
+                    self._running = False
+                    self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Spojeni se serverem bylo ztraceno"))
+                break

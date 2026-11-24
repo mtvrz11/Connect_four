@@ -38,7 +38,17 @@ void GameController::handle_login(PlayerSession& session, std::string_view body)
         return;
     }
 
-    if (body.empty() || body.size() > MAX_NICK_LENGTH || body.find(protocol::DELIMITER) != std::string_view::npos) {
+    auto is_valid_nick = [](std::string_view nick) -> bool {
+        if (nick.empty() || nick.size() > MAX_NICK_LENGTH)
+            return false;
+        for (unsigned char c : nick) {
+            if (c < 33 || c > 126 || c == static_cast<unsigned char>(protocol::DELIMITER))
+                return false;
+        }
+        return true;
+    };
+
+    if (is_valid_nick(body)) {
         send_error(session, protocol::ErrorCode::INVL);
         return;
     }
@@ -227,21 +237,30 @@ void GameController::handle_sync(PlayerSession& session, std::string_view body) 
         if (room.get_state() != RoomState::PAUSED || !room.contains_player_nick(body))
             continue;
         
-        auto opponent_fd = room.reconnect_player(session.fd, std::string(body));
-        
+        auto res = room.reconnect_player(session.fd, body);
+        if(!res.has_value())
+            continue;
+            
         session.nick = std::string(body);
         session.room_id = room_id;
-        session.state = ClientState::ACTIVE_GAME;
 
-        const std::string sres_body = room.serialize_board() + protocol::DELIMITER + room.current_turn_disc(); // Mohl bych na obecné DELIMITER prepsat vsechny carky !!! Jen pozor v pripade, ze bych pricital dva chary k sobe, tak se z nich nestane string, ale sectou se jejich ASCII hodnoty
-        send(session.fd, protocol::Opcode::SRES, sres_body);
+        const std::string stres_body = room.serialize_board() + protocol::DELIMITER
+                                       + room.current_turn_disc() + protocol::DELIMITER
+                                       + res->player_disc + protocol::DELIMITER
+                                       + res->opponent_nick;
+        send(session.fd, protocol::Opcode::SRES, stres_body);
 
-        if (opponent_fd.has_value()) {
-            auto o_it = sessions.find(*opponent_fd);
+        if (res->opponent_fd.has_value()) {
+            session.state = ClientState::ACTIVE_GAME;
+            auto o_it = sessions.find(*res->opponent_fd);
             if (o_it != sessions.end()) {
                 o_it->second.state = ClientState::ACTIVE_GAME;
-                send(*opponent_fd, protocol::Opcode::OSTA, "CONN");
+                send(*res->opponent_fd, protocol::Opcode::OSTA, "CONN");
             }
+        }
+        else {
+            session.state = ClientState::GAME_PAUSED;
+            send(session.fd, protocol::Opcode::OSTA, "DISC");
         }
 
         Logger::info("Hrac " + session.nick + " se znovu pripojil do mistnosti ID = " + std::to_string(room_id));
