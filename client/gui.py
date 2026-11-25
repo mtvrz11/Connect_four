@@ -1,11 +1,16 @@
 import queue
 import tkinter as tk
+import logging
+import time
 from collections.abc import Callable
 from tkinter import messagebox
 
 from network import NetworkClient, NetworkEvent
 from protocol import DELIMITER, MAX_NICK_LEN, Opcode
 from views import GameView, LoginView, LobbyView, PLAYER1_DISC, PLAYER2_DISC
+
+AUTO_RECONNECT_INTERVAL_MS: int = 2000
+AUTO_RECONNECT_MAX_SECONDS: float = 10
 
 class ConnectFourGUI:
     root: tk.Tk
@@ -22,6 +27,14 @@ class ConnectFourGUI:
     my_turn: bool
     game_paused: bool
     in_waiting_room: bool
+    
+    _last_host: str
+    _last_port: int
+    _is_authenticated: bool
+    _reconnecting: bool
+    _was_in_game: bool
+    _reconnect_started: float
+    
     _handlers: dict[str, Callable[[str], None]]
     
     def __init__(self, root: tk.Tk, default_host: str = "127.0.0.1", default_port: int = 10000) -> None:
@@ -37,6 +50,13 @@ class ConnectFourGUI:
         self.my_turn: bool = False
         self.game_paused: bool = False
         self.in_waiting_room: bool = False
+        
+        self._last_host = default_host
+        self._last_port = default_port
+        self._is_authenticated = False
+        self._reconnecting = False
+        self._was_in_game = False
+        self._reconnect_started = 0.0
         
         self.status_var = tk.StringVar(value="Odpojeno od serveru")
         tk.Label(self.root, textvariable=self.status_var, bd=1, relief=tk.SUNKEN, anchor=tk.W, padx=8, pady=4).pack(
@@ -88,6 +108,9 @@ class ConnectFourGUI:
         target.pack(fill=tk.BOTH, expand=True)
         
     def _protocol_error(self, detail: str) -> None:
+        logging.error(f"Chyba protokolu: {detail}")
+        self._reconnecting = False
+        self._is_authenticated = False
         self.net.disconnect()
         self.in_waiting_room = False
         self.game_paused = False
@@ -107,24 +130,78 @@ class ConnectFourGUI:
             messagebox.showwarning("Neplatny vstup", "Zadejte platnou IP adresu a prezdivku (1-20 tisknutelnych ASCII znaku bez mezer a carek).")
             return
         
+        if not port_str.isdigit() or not (1 <= int(port_str) <= 65535):
+            messagebox.showwarning("Neplatny port", "Port musi byt cele cislo v rozsahu 1 az 65535")
+            return
+        
+        port = int(port_str)
         try:
-            self.status_var.set(f"Pripojovani k {host}:{port_str}...")
+            self.status_var.set(f"Pripojovani k {host}:{port}...")
             self.root.update_idletasks()
-            self.net.connect(host, int(port_str))
+            self.net.connect(host, port)
         except OSError as exc:
             self.status_var.set("Pripojovani selhalo.")
             messagebox.showerror("Chyba site", f"Nepodarilo se pripojit k serveru:\n{exc}")
             return
         
+        self._last_host = host
+        self._last_port = port
+        self._reconnecting = False
         self.nickname = nick
         self.net.send_message(Opcode.SYNC if sync else Opcode.LGIN, nick)
     
     def _disconnect_to_login(self) -> None:
+        self._reconnecting = False
+        self._is_authenticated = False
+        self.my_disc = ""
         self.net.disconnect()
         self.in_waiting_room = False
         self.game_paused = False
         self.status_var.set("Odpojeno od serveru.")
         self._show_view(self.login_view)
+    
+    def _start_auto_reconnect(self, reason: str) -> None:
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        self._was_in_game = bool(self.my_disc)
+        self._reconnect_started = time.monotonic()
+        self.game_paused = True
+        
+        logging.info(f"Zahajuji automaticke znovupripojeni (ve hre = {self._was_in_game}): {reason}")
+        self.status_var.set(f"{reason} Automaticke znovupripojeni...")
+        if self._was_in_game:
+            self.game_view.info_var.set("Spojeni se serverem ztraceno! Obnovuji pripojeni...")
+            
+        self.root.after(AUTO_RECONNECT_INTERVAL_MS, self._attemp_reconnect)
+    
+    def _attemp_reconnect(self) -> None:
+        if not self._reconnecting:
+            return
+        
+        elapsed = time.monotonic() - self._reconnect_started
+        if elapsed >= AUTO_RECONNECT_MAX_SECONDS:
+            logging.error("Automaticke znovupripojeni selhalo po %.1f a", elapsed)
+            self._reconnecting = False
+            self._is_authenticated = False
+            self.in_waiting_room = False
+            self.game_paused = False
+            self.my_disc = ""
+            self.status_var.set("Obnova spojeni selhala (vyprsel limit)")
+            self._show_view(self.login_view)
+            messagebox.showwarning("Odpojeno", "Nepodarilo se automaticky obnovit spojeni se serverem. Muzete se o to pokusit manualne.")
+            return
+        
+        logging.info("Pokus o automaticke znovupripojeni (%.2f/%.0f s)", elapsed, AUTO_RECONNECT_MAX_SECONDS)
+        self.status_var.set(f"Obnovuji spojeni se serverem")
+        try:
+            self.net.connect(self._last_host, self._last_port, timeout=2.0)
+        except OSError:
+            self.root.after(AUTO_RECONNECT_INTERVAL_MS, self._attemp_reconnect)
+            return
+        
+        opcode = Opcode.SYNC if self._was_in_game else Opcode.LGIN
+        self.net.send_message(opcode, self.nickname)
     
     def _join_selected_room(self) -> None:
         room_id = self.lobby_view.get_selected_room_id()
@@ -136,10 +213,6 @@ class ConnectFourGUI:
     def _leave_waiting_room(self) -> None:
         if self.in_waiting_room:
             self.net.send_message(Opcode.RLEA)
-            self.in_waiting_room = False
-            self._show_view(self.lobby_view)
-            self.net.send_message(Opcode.RLST)
-            self.status_var.set("Opustili jste cekarnu.")
         
     def _send_move(self, col: int) -> None:
         if not self.in_waiting_room and not self.game_paused and self.my_turn:
@@ -152,15 +225,20 @@ class ConnectFourGUI:
             except queue.Empty:
                 break
             
-            if ev.kind in ("DISCONNECTED", "ERROR"):
+            if ev.kind == "ERROR":
+                self._protocol_error(ev.info)
+            elif ev.kind == "DISCONNECTED":
                 self.net.disconnect()
-                self.in_waiting_room = False
-                self.game_paused = False
-                self.status_var.set(ev.info)
-                self._show_view(self.login_view)
-                messagebox.showwarning(
-                    "Odpojeno", f"{ev.info}\nPri rozehrane hre pouzijte 'Obnovit hru'."
-                )
+                if self._reconnecting:
+                    self.root.after(AUTO_RECONNECT_INTERVAL_MS, self._attemp_reconnect)
+                elif self._is_authenticated:
+                    self._start_auto_reconnect(ev.info)
+                else:
+                    self.in_waiting_room = False
+                    self.game_paused = False
+                    self.status_var.set(ev.info)
+                    self._show_view(self.login_view)
+                    messagebox.showwarning("Odpojeno", f"{ev.info}")
             elif ev.kind == "MESSAGE" and ev.message is not None:
                 handler = self._handlers.get(ev.message.opcode)
                 if handler is None:
@@ -176,13 +254,21 @@ class ConnectFourGUI:
     
     def _on_lres(self, body: str) -> None:
         if body == "OK":
+            was_reconnecting = self._reconnecting
+            self._reconnecting = False
+            self._is_authenticated = True
+            self.in_waiting_room = False
+            self.game_paused = False
             self.lobby_view.set_nickname(self.nickname)
             self._show_view(self.lobby_view)
             self.net.send_message(Opcode.RLST)
-            self.status_var.set("Prihlaseni uspesne.")
+            self.status_var.set("Prihlaseni uspesne." if not was_reconnecting else "Spojeni automaticky obnoveno")
         elif body == "TAKN":
+            self._reconnecting = False
+            self._is_authenticated = False
             self.net.disconnect()
             self.status_var.set("Prezdivka je jiz zabrana.")
+            self._show_view(self.login_view)
             messagebox.showwarning("Obsazeno", "Tuto prezdivku uz pouziva nekdo jiny. Vyberte si jinou.")
         else:
             self._protocol_error(f"Neplatna odpoved LRES: {body}")
@@ -202,6 +288,11 @@ class ConnectFourGUI:
         if body == "FULL":
             messagebox.showwarning("Plny server", "Server dosahl maximalniho poctu mistnosti. Pripojte se do jiz existujici nebo cekejte na uvolneni.")
             return
+        if body == "LEFT":
+            self.in_waiting_room = False
+            self._show_view(self.lobby_view)
+            self.net.send_message(Opcode.RLST)
+            self.status_var.set("Opustili jste cekarnu.")
         if not body.isdigit():
             self._protocol_error(f"Neplatne ID mistnosti v RRES: {body}")
             return
@@ -274,9 +365,20 @@ class ConnectFourGUI:
             
     def _on_sres(self, body: str) -> None:
         if body == "NOTF":
+            was_reconnecting = self._reconnecting
+            self._reconnecting = False
+            self._is_authenticated = False
+            self.my_disc = ""
+            self.in_waiting_room = False
+            self.game_paused = False
             self.net.disconnect()
-            self.status_var.set("Rozehrana hra nenalezena.")
-            messagebox.showinfo("Obnova hry", "Pro tuto prezdivku neexistuje zadna rozehrana hra.")
+            self._show_view(self.login_view)
+            if was_reconnecting:
+                self.status_var.set("Hru se nepodarilo obnovit (vyprsel limit)")
+                messagebox.showinfo("Obnova hry", "Rozehrana hra jiz vyprsela")
+            else:
+                self.status_var.set("Rozehrana hra nenalezena.")
+                messagebox.showinfo("Obnova hry", "Pro tuto prezdivku neexistuje zadna rozehrana hra.")
             return
         
         parts = body.split(DELIMITER)
@@ -287,6 +389,8 @@ class ConnectFourGUI:
             return
         
         board_str, turn_disc, my_disc, opponent_nick = parts
+        self._reconnecting = False
+        self._is_authenticated = True
         self.my_disc = my_disc
         self.opponent_nick = opponent_nick
         self.in_waiting_room = False
@@ -302,5 +406,7 @@ class ConnectFourGUI:
         messagebox.showwarning("Chyba protokolu", f"Server vratil chybu: {body}")
     
     def _on_close(self) -> None:
+        self._reconnecting = False
+        self._is_authenticated = False
         self.net.disconnect()
         self.root.destroy()

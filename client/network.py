@@ -2,6 +2,7 @@ import queue
 import socket
 import threading
 import time
+import logging
 from dataclasses import dataclass
 
 from protocol import ExtractStatus, ParsedMessage, build_message, extract_message, Opcode
@@ -33,6 +34,7 @@ class NetworkClient:
     def connect(self, host:str, port: int, timeout: float = 10.0) -> None:
         self.disconnect()
         
+        logging.info(f"Pripojovani k serveru {host}:{port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout) # jen ochrana proti dlouhemu cekani pri zadani spatne adresy
         sock.connect((host, port))
@@ -46,8 +48,10 @@ class NetworkClient:
         self._running = True
         self._recv_thread = threading.Thread(target=self._recieve_loop, daemon=True)
         self._recv_thread.start()
+        logging.info("Spojeni navazano ({host}:{port})")
         
     def disconnect(self):
+        was_running = self._running
         self._running = False
         self._waiting_for_pong = False
         with self._send_lock:
@@ -58,6 +62,8 @@ class NetworkClient:
                     pass
                 self._sock.close()
                 self._sock = None
+        if was_running:
+            logging.info("Spojeni ukonceno.")
     
     def send_message(self, opcode: Opcode, body: str = "") -> None:
         raw = build_message(opcode, body)
@@ -66,8 +72,9 @@ class NetworkClient:
                 return
             try:
                 self._sock.sendall(raw)
-            except OSError:
+            except OSError as exc:
                 self._running = False
+                logging.warning(f"Chyba pri odesilani zpravy: {exc}")
                 self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Ztrata spojeni se serverem"))
     
     def _recieve_loop(self) -> None:
@@ -79,6 +86,7 @@ class NetworkClient:
                 if not chunk:
                     if self._running:
                         self._running = False
+                        logging.warning("Server ukoncil spojeni (EOF)")
                         self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Server ukoncil spojeni"))
                     break
                 
@@ -96,6 +104,7 @@ class NetworkClient:
                             self.incoming_queue.put(NetworkEvent("MESSAGE", msg))
                     elif status == ExtractStatus.INVALID_HEADER:
                         self._running = False
+                        logging.error("Prijata zprava s nevalidni hlavickou ze serveru.")
                         self.incoming_queue.put(NetworkEvent(kind="ERROR", info="Server poslal nevalidni hlavicku protokolu."))
                         break
                     else:
@@ -107,6 +116,7 @@ class NetworkClient:
                 if self._waiting_for_pong:
                     if (now - self._ping_sent_time) >= PONG_TIMEOUT:
                         self._running = False
+                        logging.warning("Vyprsel cas cekani na PONG ze serveru.")
                         self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Server neodpovedel na PING"))
                         break
                 elif (now - self._last_rx_time) >= PING_INTERVAL:
@@ -114,8 +124,9 @@ class NetworkClient:
                     self._waiting_for_pong = True
                     self._ping_sent_time = now
                 continue
-            except OSError:
+            except OSError as exc:
                 if self._running:
                     self._running = False
+                    logging.warning(f"Sitova chyba pri cteni: {exc}")
                     self.incoming_queue.put(NetworkEvent(kind="DISCONNECTED", info="Spojeni se serverem bylo ztraceno"))
                 break

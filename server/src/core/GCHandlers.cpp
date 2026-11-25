@@ -176,6 +176,7 @@ void GameController::handle_room_leave(PlayerSession& session, std::string_view 
     session.room_id = std::nullopt;
     session.state = ClientState::LOBBY;
     Logger::info("Hrac " + session.nick + " opustil mistnost ID = " + std::to_string(room_id));
+    send(session.fd, protocol::Opcode::RRES, "LEFT");
 }
 
 void GameController::handle_game_move(PlayerSession& session, std::string_view body) {
